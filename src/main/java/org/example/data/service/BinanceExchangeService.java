@@ -24,17 +24,22 @@ import java.util.concurrent.TimeUnit;
 /**
  * BinanceExchangeService provides concrete implementations of the abstract
  * methods in ExchangeService using Binance API endpoints.
+ *
+ * Important messages that were previously output to the console are now accumulated
+ * in a log, which can be retrieved via getLogMessages().
  */
 public class BinanceExchangeService extends ExchangeService {
 
-    // Updated WebSocket URL (without port specification that might cause issues)
     private static final String BASE_URL = "https://api.binance.com";
     private static final String WS_BASE_URL = "wss://stream.binance.com/ws";
-    
+
     // WebSocket client and connection
     private HttpClient wsClient;
     private WebSocket webSocket;
     private BinanceWebSocketListener webSocketListener;
+
+    // Accumulates important log messages.
+    private StringBuilder logBuilder = new StringBuilder();
 
     /**
      * Constructs a BinanceExchangeService instance.
@@ -46,6 +51,15 @@ public class BinanceExchangeService extends ExchangeService {
         super("Binance", fees);
         this.wsClient = HttpClient.newHttpClient();
         this.webSocketListener = new BinanceWebSocketListener();
+    }
+
+    /**
+     * Returns the accumulated log messages as a String.
+     *
+     * @return a String containing log messages.
+     */
+    public String getLogMessages() {
+        return logBuilder.toString();
     }
 
     /**
@@ -80,7 +94,6 @@ public class BinanceExchangeService extends ExchangeService {
                 JSONObject symbolObj = symbols.getJSONObject(i);
                 // Only include symbols that are actively trading.
                 if (symbolObj.getString("status").equalsIgnoreCase("TRADING")) {
-                    // With a simplified TradingPair model, we only store the symbol.
                     String symbol = symbolObj.getString("symbol");
                     TradingPair pair = new TradingPair(symbol);
                     tradingPairs.add(pair);
@@ -129,6 +142,8 @@ public class BinanceExchangeService extends ExchangeService {
 
             ticker = new Ticker(bidPrice, askPrice, lastPrice, volume, timestamp);
         } catch (Exception e) {
+            logBuilder.append("Error fetching ticker data for ").append(symbol).append(": ")
+                    .append(e.getMessage()).append("\n");
             System.err.println("Error fetching ticker data for " + symbol + ": " + e.getMessage());
         }
         return ticker;
@@ -183,16 +198,18 @@ public class BinanceExchangeService extends ExchangeService {
             Date timestamp = new Date(); // Using current time for the snapshot
             orderBook = new OrderBook(symbol, bids, asks, timestamp);
         } catch (Exception e) {
+            logBuilder.append("Error fetching order book for ").append(symbol).append(": ")
+                    .append(e.getMessage()).append("\n");
             System.err.println("Error fetching order book for " + symbol + ": " + e.getMessage());
         }
         return orderBook;
     }
-    
+
     /**
-     * Initializes WebSocket connections for market data streaming from Binance
+     * Initializes WebSocket connections for market data streaming from Binance.
      *
-     * @param symbols List of symbols to subscribe to
-     * @return true if successfully connected, false otherwise
+     * @param symbols List of symbols to subscribe to.
+     * @return true if successfully connected, false otherwise.
      */
     @Override
     public boolean initializeWebSocket(List<String> symbols) {
@@ -200,57 +217,49 @@ public class BinanceExchangeService extends ExchangeService {
             if (symbols == null || symbols.isEmpty()) {
                 return false;
             }
-            
-            // Close any existing WebSocket connection
+
+            // Close any existing WebSocket connection.
             closeWebSocket();
-            
-            // Create a new WebSocket client and connect
+
+            // Create a new WebSocket client and connect.
             wsClient = HttpClient.newHttpClient();
-            
-            // Log the WebSocket URL and symbols for debugging
-            System.out.println("Connecting to Binance WebSocket at: " + WS_BASE_URL);
-            System.out.println("Subscribing to symbols: " + symbols);
-            
-            // Build proper WebSocket subscription message for Binance
-            // This is the Binance-specific format for subscribing to trade and depth (order book) streams
+
+            // Build proper WebSocket subscription message for Binance.
             List<String> streams = new ArrayList<>();
             for (String symbol : symbols) {
-                // Convert symbol to lowercase for Binance
-                String formattedSymbol = symbol.toLowerCase();
-                streams.add(formattedSymbol + "@trade");    // For trade data
-                streams.add(formattedSymbol + "@depth20");  // For order book data
+                String formattedSymbol = symbol.toLowerCase(); // Binance requires lowercase for streams.
+                streams.add(formattedSymbol + "@trade");    // For trade data.
+                streams.add(formattedSymbol + "@depth20");    // For order book data.
             }
-            
-            // Create subscription message in the correct Binance format
+
             JSONObject subscriptionMsg = new JSONObject();
             subscriptionMsg.put("method", "SUBSCRIBE");
             subscriptionMsg.put("params", streams);
             subscriptionMsg.put("id", 1);
             String subscriptionString = subscriptionMsg.toString();
-            
-            // Build WebSocket
+
+            // Build WebSocket.
             CompletableFuture<WebSocket> webSocketFuture = wsClient.newWebSocketBuilder()
                     .buildAsync(URI.create(WS_BASE_URL), new BinanceWebSocketListener());
-            
-            // Wait for connection to complete
+
+            // Wait for connection to complete.
             webSocket = webSocketFuture.get(10, TimeUnit.SECONDS);
-            
-            // Send subscription message
-            System.out.println("Sending subscription message: " + subscriptionString);
+
+            // Send subscription message.
             webSocket.sendText(subscriptionString, true);
-            
-            System.out.println("Binance WebSocket connection and subscription successful");
+            logBuilder.append("Binance WebSocket connection and subscription successful.\n");
             return true;
         } catch (Exception e) {
+            logBuilder.append("Error initializing Binance WebSocket: ").append(e.getMessage()).append("\n");
             System.err.println("Error initializing Binance WebSocket: " + e.getMessage());
             e.printStackTrace();
             closeWebSocket();
             return false;
         }
     }
-    
+
     /**
-     * Closes the WebSocket connection
+     * Closes the WebSocket connection.
      */
     @Override
     public void closeWebSocket() {
@@ -258,25 +267,26 @@ public class BinanceExchangeService extends ExchangeService {
             try {
                 webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Closing connection");
                 websocketConnected = false;
-                System.out.println("Binance WebSocket connection closed");
+                logBuilder.append("Binance WebSocket connection closed.\n");
             } catch (Exception e) {
+                logBuilder.append("Error closing Binance WebSocket: ").append(e.getMessage()).append("\n");
                 System.err.println("Error closing Binance WebSocket: " + e.getMessage());
             }
         }
     }
-    
+
     /**
-     * WebSocket listener for Binance data
+     * WebSocket listener for Binance data.
      */
     private class BinanceWebSocketListener implements WebSocket.Listener {
         private StringBuilder buffer = new StringBuilder();
-        
+
         @Override
         public void onOpen(WebSocket webSocket) {
-            System.out.println("Binance WebSocket connection opened");
+            logBuilder.append("Binance WebSocket connection opened.\n");
             WebSocket.Listener.super.onOpen(webSocket);
         }
-        
+
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             buffer.append(data);
@@ -286,78 +296,79 @@ public class BinanceExchangeService extends ExchangeService {
                 try {
                     processMessage(message);
                 } catch (Exception e) {
+                    logBuilder.append("Error processing Binance WebSocket message: ")
+                            .append(e.getMessage()).append("\n");
                     System.err.println("Error processing Binance WebSocket message: " + e.getMessage());
                 }
             }
             return WebSocket.Listener.super.onText(webSocket, data, last);
         }
-        
+
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            System.out.println("Binance WebSocket closed: " + statusCode + ", reason: " + reason);
+            logBuilder.append("Binance WebSocket closed: ").append(statusCode)
+                    .append(", reason: ").append(reason).append("\n");
             websocketConnected = false;
             return WebSocket.Listener.super.onClose(webSocket, statusCode, reason);
         }
-        
+
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
+            logBuilder.append("Binance WebSocket error: ").append(error.getMessage()).append("\n");
             System.err.println("Binance WebSocket error: " + error.getMessage());
             error.printStackTrace();
             websocketConnected = false;
             WebSocket.Listener.super.onError(webSocket, error);
         }
-        
+
         /**
-         * Process the WebSocket message and update the cache
+         * Process the WebSocket message and update the cache.
          */
         private void processMessage(String message) {
             try {
-                // Check if we're dealing with a simple error message
+                // Check for error messages.
                 if (message.contains("error")) {
-                    System.err.println("Binance WebSocket error message: " + message);
+                    logBuilder.append("Binance WebSocket error message: ").append(message).append("\n");
                     return;
                 }
-                
+
                 JSONObject json = new JSONObject(message);
-                
-                // Single stream format
+
+                // Single stream format.
                 if (json.has("e") && json.has("s")) {
                     String eventType = json.getString("e");
                     String symbol = json.getString("s");
-                    
+
                     if ("24hrTicker".equals(eventType)) {
                         double bidPrice = json.getDouble("b");
                         double askPrice = json.getDouble("a");
                         double lastPrice = json.getDouble("c");
                         double volume = json.getDouble("v");
-                        
+
                         Ticker ticker = new Ticker(bidPrice, askPrice, lastPrice, volume, new Date());
                         tickerCache.put(symbol, ticker);
                     }
-                    // Handle other single stream formats if needed
                 }
-                // Combined streams format
+                // Combined streams format.
                 else if (json.has("data") && json.has("stream")) {
                     String stream = json.getString("stream");
                     JSONObject data = json.getJSONObject("data");
-                    
+
                     if (stream.contains("@ticker")) {
-                        // Parse ticker data
-                        String symbol = data.getString("s"); // Symbol
-                        double bidPrice = data.getDouble("b"); // Best bid price
-                        double askPrice = data.getDouble("a"); // Best ask price
-                        double lastPrice = data.getDouble("c"); // Close price
-                        double volume = data.getDouble("v"); // Total trading volume
-                        
+                        String symbol = data.getString("s");
+                        double bidPrice = data.getDouble("b");
+                        double askPrice = data.getDouble("a");
+                        double lastPrice = data.getDouble("c");
+                        double volume = data.getDouble("v");
+
                         Ticker ticker = new Ticker(bidPrice, askPrice, lastPrice, volume, new Date());
                         tickerCache.put(symbol, ticker);
-                    } 
+                    }
                     else if (stream.contains("@depth")) {
-                        // Parse order book data
                         String symbol = data.getString("s");
                         JSONArray bidsArray = data.getJSONArray("bids");
                         JSONArray asksArray = data.getJSONArray("asks");
-                        
+
                         List<OrderBookEntry> bids = new ArrayList<>();
                         for (int i = 0; i < bidsArray.length(); i++) {
                             JSONArray entry = bidsArray.getJSONArray(i);
@@ -365,7 +376,7 @@ public class BinanceExchangeService extends ExchangeService {
                             double volume = Double.parseDouble(entry.getString(1));
                             bids.add(new OrderBookEntry(price, volume));
                         }
-                        
+
                         List<OrderBookEntry> asks = new ArrayList<>();
                         for (int i = 0; i < asksArray.length(); i++) {
                             JSONArray entry = asksArray.getJSONArray(i);
@@ -373,15 +384,16 @@ public class BinanceExchangeService extends ExchangeService {
                             double volume = Double.parseDouble(entry.getString(1));
                             asks.add(new OrderBookEntry(price, volume));
                         }
-                        
+
                         OrderBook orderBook = new OrderBook(symbol, bids, asks, new Date());
                         orderBookCache.put(symbol, orderBook);
                     }
                 } else {
-                    System.out.println("Unrecognized Binance WebSocket message format: " + message);
+                    logBuilder.append("Unrecognized Binance WebSocket message format: ").append(message).append("\n");
                 }
             } catch (Exception e) {
-                System.err.println("Error parsing Binance WebSocket message: " + message);
+                logBuilder.append("Error parsing Binance WebSocket message: ").append(message)
+                        .append(" | Exception: ").append(e.getMessage()).append("\n");
                 e.printStackTrace();
             }
         }

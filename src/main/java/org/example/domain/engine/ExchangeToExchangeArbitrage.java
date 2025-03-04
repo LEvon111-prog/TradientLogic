@@ -1,22 +1,27 @@
 package org.example.domain.engine;
 
 import org.example.data.model.ArbitrageOpportunity;
-import org.example.data.model.TradingPair;
-import org.example.data.model.Ticker;
-import org.example.data.service.ExchangeService;
 import org.example.data.model.RiskAssessment;
+import org.example.data.model.Ticker;
+import org.example.data.model.TradingPair;
+import org.example.data.service.ExchangeService;
 import org.example.domain.risk.RiskCalculator;
+
+import java.util.Date;
 
 /**
  * This class encapsulates the logic for detecting an arbitrage opportunity
  * between two exchanges for a given trading pair, taking fees into account.
  * It now outputs detailed logging at each computation step.
+ *
+ * All log messages are accumulated internally and can be retrieved via getLogMessages().
  */
 public class ExchangeToExchangeArbitrage {
     private ExchangeService exchangeA;
     private ExchangeService exchangeB;
     private RiskCalculator riskCalculator;
-    private double minProfitPercent = 0.5; // Default minimum profit percentage (0.5%)
+    private double minProfitPercent = 0.1; // Default minimum profit percentage (0.1%)
+    private StringBuilder logBuilder = new StringBuilder();
 
     /**
      * Constructor that initializes the two exchange services.
@@ -27,101 +32,125 @@ public class ExchangeToExchangeArbitrage {
     public ExchangeToExchangeArbitrage(ExchangeService exchangeA, ExchangeService exchangeB) {
         this.exchangeA = exchangeA;
         this.exchangeB = exchangeB;
-        this.riskCalculator = new RiskCalculator(minProfitPercent / 100); // Convert to decimal
+        // Convert minProfitPercent to decimal for the risk calculator calculation.
+        this.riskCalculator = new RiskCalculator(minProfitPercent / 100);
+    }
+
+    /**
+     * Returns all accumulated log messages.
+     *
+     * @return A string containing the log messages.
+     */
+    public String getLogMessages() {
+        return logBuilder.toString();
     }
 
     /**
      * Calculates the potential arbitrage opportunity between two exchanges for a given trading pair.
-     * @param pair The trading pair to analyze
-     * @return An ArbitrageOpportunity object if an opportunity exists, null otherwise
+     *
+     * @param pair The trading pair to analyze.
+     * @return An ArbitrageOpportunity object if an opportunity exists, null otherwise.
      */
     public ArbitrageOpportunity calculateArbitrage(TradingPair pair) {
         if (pair == null) {
+            logBuilder.append("Trading pair is null; aborting arbitrage calculation.\n");
             return null;
         }
 
         String symbol = pair.getSymbol();
-        
+        logBuilder.append("Analyzing arbitrage for symbol: ").append(symbol).append("\n");
+
         // Get ticker data from both exchanges
         Ticker tickerA = exchangeA.getTickerData(symbol);
         Ticker tickerB = exchangeB.getTickerData(symbol);
-        
+
         if (tickerA == null || tickerB == null) {
+            logBuilder.append("Insufficient ticker data from one or both exchanges.\n");
             return null;  // Can't compare if we don't have data from both exchanges
         }
-        
-        // Get the actual trading fees for each exchange
+
+        // Get the trading fees for each exchange
         double feesA = exchangeA.getTradingFees();
         double feesB = exchangeB.getTradingFees();
-        
-        System.out.println("Comparing " + exchangeA.getExchangeName() + " (fees: " + (feesA * 100) + "%) vs " + 
-                           exchangeB.getExchangeName() + " (fees: " + (feesB * 100) + "%)");
-        
+
+        logBuilder.append("Comparing ").append(exchangeA.getExchangeName())
+                .append(" (fees: ").append(feesA * 100).append("%) vs ")
+                .append(exchangeB.getExchangeName()).append(" (fees: ")
+                .append(feesB * 100).append("%)\n");
+
         // Case 1: Buy on A, sell on B
         double buyOnAPrice = tickerA.getAskPrice();
         double sellOnBPrice = tickerB.getBidPrice();
-        
-        // Calculate net profit after fees
+
+        // Calculate net profit after fees for case 1
         double netProfitAB = calculateNetProfit(buyOnAPrice, sellOnBPrice, feesA, feesB);
         double profitPercentAB = (netProfitAB / buyOnAPrice) * 100;
-        
-        System.out.println("Buy on " + exchangeA.getExchangeName() + " at " + buyOnAPrice + 
-                          ", Sell on " + exchangeB.getExchangeName() + " at " + sellOnBPrice + 
-                          " = " + String.format("%.4f", profitPercentAB) + "% profit after fees");
-        
+
+        logBuilder.append("Buy on ").append(exchangeA.getExchangeName()).append(" at ").append(buyOnAPrice)
+                .append(", Sell on ").append(exchangeB.getExchangeName()).append(" at ").append(sellOnBPrice)
+                .append(" = ").append(String.format("%.4f", profitPercentAB))
+                .append("% profit after fees\n");
+
         // Case 2: Buy on B, sell on A
         double buyOnBPrice = tickerB.getAskPrice();
         double sellOnAPrice = tickerA.getBidPrice();
-        
-        // Calculate net profit after fees
+
+        // Calculate net profit after fees for case 2
         double netProfitBA = calculateNetProfit(buyOnBPrice, sellOnAPrice, feesB, feesA);
         double profitPercentBA = (netProfitBA / buyOnBPrice) * 100;
-        
-        System.out.println("Buy on " + exchangeB.getExchangeName() + " at " + buyOnBPrice + 
-                          ", Sell on " + exchangeA.getExchangeName() + " at " + sellOnAPrice + 
-                          " = " + String.format("%.4f", profitPercentBA) + "% profit after fees");
-        
-        // Determine which direction has higher profit potential
+
+        logBuilder.append("Buy on ").append(exchangeB.getExchangeName()).append(" at ").append(buyOnBPrice)
+                .append(", Sell on ").append(exchangeA.getExchangeName()).append(" at ").append(sellOnAPrice)
+                .append(" = ").append(String.format("%.4f", profitPercentBA))
+                .append("% profit after fees\n");
+
+        // Determine which direction has the higher profit potential and meets the minimum profit threshold
         if (profitPercentAB > profitPercentBA && profitPercentAB > minProfitPercent) {
-            // Create a risk assessment object using the risk calculator
+            // Risk assessment is calculated here (unused in this example but could be used further)
             RiskAssessment riskAssessment = riskCalculator.calculateRisk(tickerA, tickerB, feesA, feesB);
+            logBuilder.append("Arbitrage opportunity detected: Buy on ").append(exchangeA.getExchangeName())
+                    .append(", sell on ").append(exchangeB.getExchangeName()).append("\n");
             
-            // Return opportunity to buy on A and sell on B with detailed information
-            return new ArbitrageOpportunity(
-                    pair.getSymbol(),  // Normalized symbol
-                    symbol,            // Buy symbol
-                    symbol,            // Sell symbol
-                    exchangeA.getExchangeName(),  // Buy exchange
-                    exchangeB.getExchangeName(),  // Sell exchange
-                    buyOnAPrice,       // Buy price
-                    sellOnBPrice,      // Sell price
-                    profitPercentAB    // Profit percentage after fees
+            ArbitrageOpportunity opportunity = new ArbitrageOpportunity(
+                    pair.getSymbol(),           // Normalized symbol
+                    symbol,                     // Buy symbol
+                    symbol,                     // Sell symbol
+                    exchangeA.getExchangeName(),// Buy exchange
+                    exchangeB.getExchangeName(),// Sell exchange
+                    buyOnAPrice,                // Buy price
+                    sellOnBPrice,               // Sell price
+                    profitPercentAB             // Profit percentage after fees
             );
-            
+            opportunity.setRiskAssessment(riskAssessment);
+            return opportunity;
+
         } else if (profitPercentBA > minProfitPercent) {
-            // Create a risk assessment object using the risk calculator
             RiskAssessment riskAssessment = riskCalculator.calculateRisk(tickerB, tickerA, feesB, feesA);
+            logBuilder.append("Arbitrage opportunity detected: Buy on ").append(exchangeB.getExchangeName())
+                    .append(", sell on ").append(exchangeA.getExchangeName()).append("\n");
             
-            // Return opportunity to buy on B and sell on A with detailed information
-            return new ArbitrageOpportunity(
-                    pair.getSymbol(),  // Normalized symbol
-                    symbol,            // Buy symbol
-                    symbol,            // Sell symbol
-                    exchangeB.getExchangeName(),  // Buy exchange
-                    exchangeA.getExchangeName(),  // Sell exchange
-                    buyOnBPrice,       // Buy price
-                    sellOnAPrice,      // Sell price
-                    profitPercentBA    // Profit percentage after fees
+            ArbitrageOpportunity opportunity = new ArbitrageOpportunity(
+                    pair.getSymbol(),            // Normalized symbol
+                    symbol,                      // Buy symbol
+                    symbol,                      // Sell symbol
+                    exchangeB.getExchangeName(), // Buy exchange
+                    exchangeA.getExchangeName(), // Sell exchange
+                    buyOnBPrice,                 // Buy price
+                    sellOnAPrice,                // Sell price
+                    profitPercentBA              // Profit percentage after fees
             );
+            opportunity.setRiskAssessment(riskAssessment);
+            return opportunity;
         }
-        
+
+        logBuilder.append("No profitable arbitrage opportunity found for symbol: ").append(symbol).append("\n");
         // No profitable arbitrage opportunity found
         return null;
     }
 
     /**
      * Calculates the net profit after accounting for fees.
-     * Assumes that fees are expressed as a decimal.
+     * Assumes that fees are expressed as decimals.
      *
      * @param buyPrice  The price at which the asset is bought.
      * @param sellPrice The price at which the asset is sold.
@@ -130,24 +159,24 @@ public class ExchangeToExchangeArbitrage {
      * @return The net profit after fees.
      */
     private double calculateNetProfit(double buyPrice, double sellPrice, double feeBuy, double feeSell) {
-        // Calculate the amount spent including fees (buy side)
+        // Calculate the amount spent including fees on the buy side
         double amountSpent = buyPrice * (1 + feeBuy);
-        
-        // Calculate the amount received after fees (sell side)
+
+        // Calculate the amount received after fees on the sell side
         double amountReceived = sellPrice * (1 - feeSell);
-        
+
         // Net profit is the difference
         double netProfit = amountReceived - amountSpent;
-        
-        System.out.println("Net profit calculation:");
-        System.out.println("  Buy price: " + buyPrice);
-        System.out.println("  + Buy fee: " + (buyPrice * feeBuy) + " (" + (feeBuy * 100) + "%)");
-        System.out.println("  = Total cost: " + amountSpent);
-        System.out.println("  Sell price: " + sellPrice);
-        System.out.println("  - Sell fee: " + (sellPrice * feeSell) + " (" + (feeSell * 100) + "%)");
-        System.out.println("  = Net received: " + amountReceived);
-        System.out.println("  Net profit: " + netProfit);
-        
+
+        logBuilder.append("Net profit calculation:\n");
+        logBuilder.append("  Buy price: ").append(buyPrice).append("\n");
+        logBuilder.append("  + Buy fee: ").append(buyPrice * feeBuy).append(" (").append(feeBuy * 100).append("%)\n");
+        logBuilder.append("  = Total cost: ").append(amountSpent).append("\n");
+        logBuilder.append("  Sell price: ").append(sellPrice).append("\n");
+        logBuilder.append("  - Sell fee: ").append(sellPrice * feeSell).append(" (").append(feeSell * 100).append("%)\n");
+        logBuilder.append("  = Net received: ").append(amountReceived).append("\n");
+        logBuilder.append("  Net profit: ").append(netProfit).append("\n");
+
         return netProfit;
     }
 

@@ -3,6 +3,7 @@ package org.example;
 import org.example.data.model.ArbitrageOpportunity;
 import org.example.data.model.Ticker;
 import org.example.data.model.TradingPair;
+import org.example.data.model.RiskAssessment;
 import org.example.data.service.BinanceExchangeService;
 import org.example.data.service.BybitV5ExchangeService;
 import org.example.data.service.CoinbaseExchangeService;
@@ -26,7 +27,7 @@ import java.util.stream.Collectors;
 
 public class ArbitrageProcessMain {
     // Minimum profit percentage to consider an arbitrage opportunity
-    private static final double MIN_PROFIT_PERCENT = 0.5; // 0.5%
+    private static final double MIN_PROFIT_PERCENT = 0.1; // 0.5%
     
     // Store exchange symbol mappings
     private static Map<ExchangeService, Map<String, String>> exchangeSymbolMap = new HashMap<>();
@@ -64,11 +65,10 @@ public class ArbitrageProcessMain {
             System.out.println("Limited to 10 common symbols for demonstration purposes");
         }
         
-        System.out.println("Found " + commonSymbols.size() + " common trading pairs after normalization");
+
         
         // Step 4: Initialize WebSocket connections for all exchanges with proper error handling
-        System.out.println("\n[Step 4] Initializing WebSocket connections for real-time data...");
-        
+
         // Only attempt to initialize WebSockets if there are common symbols
         if (!commonSymbols.isEmpty()) {
             try {
@@ -89,31 +89,18 @@ public class ArbitrageProcessMain {
                         }
                         
                         if (exchangeSpecificSymbols.isEmpty()) {
-                            System.out.println("[" + ex.getExchangeName() + "] No valid symbols found for WebSocket");
                             continue;
                         }
                         
-                        System.out.println("Connecting to " + ex.getExchangeName() + " WebSocket with symbols: " + exchangeSpecificSymbols);
                         boolean success = ex.initializeWebSocket(exchangeSpecificSymbols);
-                        if (success) {
-                            System.out.println("[" + ex.getExchangeName() + "] WebSocket initialized successfully");
-                        } else {
-                            System.out.println("[" + ex.getExchangeName() + "] WebSocket initialization returned false, will use REST API");
-                        }
+
                     } catch (Exception e) {
-                        System.err.println("[" + ex.getExchangeName() + "] Error initializing WebSocket: " + e.getMessage());
                         e.printStackTrace();
-                        System.out.println("[" + ex.getExchangeName() + "] Will fall back to REST API for this exchange");
                     }
                 }
                 
                 // Wait for WebSocket connections to establish and receive initial data
-                try {
-                    System.out.println("\nWaiting for WebSocket connections to establish...");
-                    Thread.sleep(5000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+
             } catch (Exception e) {
                 System.err.println("Error during WebSocket initialization: " + e.getMessage());
                 e.printStackTrace();
@@ -365,6 +352,13 @@ public class ArbitrageProcessMain {
                         double profitPercent = (sellPrice / buyPrice - 1) * 100;
                         
                         if (profitPercent > MIN_PROFIT_PERCENT) {
+                            // Create risk calculator for this opportunity
+                            RiskCalculator riskCalc = new RiskCalculator(MIN_PROFIT_PERCENT / 100);
+                            
+                            // Calculate risk assessment
+                            RiskAssessment riskAssessment = riskCalc.calculateRisk(tickerA, tickerB, 
+                                    exchangeA.getTradingFees(), exchangeB.getTradingFees());
+                            
                             ArbitrageOpportunity opportunity = new ArbitrageOpportunity(
                                     normalizedSymbol,
                                     symbolA,
@@ -375,8 +369,19 @@ public class ArbitrageProcessMain {
                                     sellPrice,
                                     profitPercent
                             );
+                            
+                            // Set the risk assessment on the opportunity
+                            opportunity.setRiskAssessment(riskAssessment);
+                            
                             opportunities.add(opportunity);
                             System.out.println("Found opportunity: " + opportunity);
+                            System.out.println("  Risk Assessment:");
+                            System.out.println("    Liquidity Score: " + String.format("%.2f", riskAssessment.getLiquidityScore()) + " (higher is better)");
+                            System.out.println("    Volatility Score: " + String.format("%.2f", riskAssessment.getVolatilityScore()) + " (higher is better)");
+                            System.out.println("    Fee Impact: " + String.format("%.2f", riskAssessment.getFeeImpact()) + " (higher is better)");
+                            System.out.println("    Market Depth: " + String.format("%.2f", riskAssessment.getMarketDepthScore()) + " (higher is better)");
+                            System.out.println("    Execution Speed Risk: " + String.format("%.2f", riskAssessment.getExecutionSpeedRisk()) + " (higher is better)");
+                            System.out.println("    Overall Risk Score: " + String.format("%.2f", riskAssessment.getOverallRiskScore()) + " (higher is better)");
                         }
                         
                         // Check for arbitrage opportunity B -> A (buy on B, sell on A)
@@ -385,6 +390,13 @@ public class ArbitrageProcessMain {
                         profitPercent = (sellPrice / buyPrice - 1) * 100;
                         
                         if (profitPercent > MIN_PROFIT_PERCENT) {
+                            // Create risk calculator for this opportunity
+                            RiskCalculator riskCalc = new RiskCalculator(MIN_PROFIT_PERCENT / 100);
+                            
+                            // Calculate risk assessment
+                            RiskAssessment riskAssessment = riskCalc.calculateRisk(tickerB, tickerA, 
+                                    exchangeB.getTradingFees(), exchangeA.getTradingFees());
+                            
                             ArbitrageOpportunity opportunity = new ArbitrageOpportunity(
                                     normalizedSymbol,
                                     symbolB,
@@ -395,8 +407,19 @@ public class ArbitrageProcessMain {
                                     sellPrice,
                                     profitPercent
                             );
+                            
+                            // Set the risk assessment on the opportunity
+                            opportunity.setRiskAssessment(riskAssessment);
+                            
                             opportunities.add(opportunity);
                             System.out.println("Found opportunity: " + opportunity);
+                            System.out.println("  Risk Assessment:");
+                            System.out.println("    Liquidity Score: " + String.format("%.2f", riskAssessment.getLiquidityScore()) + " (higher is better)");
+                            System.out.println("    Volatility Score: " + String.format("%.2f", riskAssessment.getVolatilityScore()) + " (higher is better)");
+                            System.out.println("    Fee Impact: " + String.format("%.2f", riskAssessment.getFeeImpact()) + " (higher is better)");
+                            System.out.println("    Market Depth: " + String.format("%.2f", riskAssessment.getMarketDepthScore()) + " (higher is better)");
+                            System.out.println("    Execution Speed Risk: " + String.format("%.2f", riskAssessment.getExecutionSpeedRisk()) + " (higher is better)");
+                            System.out.println("    Overall Risk Score: " + String.format("%.2f", riskAssessment.getOverallRiskScore()) + " (higher is better)");
                         }
                     } catch (Exception e) {
                         System.err.println("Error comparing " + symbolA + " on " + exchangeA.getExchangeName() + 
@@ -414,11 +437,21 @@ public class ArbitrageProcessMain {
             // Sort opportunities by profit percentage (descending)
             opportunities.sort((o1, o2) -> Double.compare(o2.getProfitPercent(), o1.getProfitPercent()));
             
-            // Display the top opportunities
+            // Display the top opportunities with risk assessment
             int displayCount = Math.min(5, opportunities.size());
-            System.out.println("\nTop " + displayCount + " opportunities:");
+            System.out.println("\nTop " + displayCount + " opportunities with risk assessment:");
             for (int i = 0; i < displayCount; i++) {
-                System.out.println((i+1) + ". " + opportunities.get(i));
+                ArbitrageOpportunity opportunity = opportunities.get(i);
+                RiskAssessment risk = opportunity.getRiskAssessment();
+                
+                System.out.println((i+1) + ". " + opportunity);
+                System.out.println("   Risk Assessment Summary:");
+                System.out.println("     Liquidity: " + String.format("%.2f", risk.getLiquidityScore()) + 
+                                   ", Volatility: " + String.format("%.2f", risk.getVolatilityScore()) + 
+                                   ", Fee Impact: " + String.format("%.2f", risk.getFeeImpact()));
+                System.out.println("     Market Depth: " + String.format("%.2f", risk.getMarketDepthScore()) + 
+                                   ", Execution Speed: " + String.format("%.2f", risk.getExecutionSpeedRisk()) + 
+                                   ", Overall Risk: " + String.format("%.2f", risk.getOverallRiskScore()));
             }
         }
     }

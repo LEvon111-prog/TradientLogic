@@ -16,10 +16,10 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
-import java.util.HashMap;
 
 /**
  * KrakenExchangeService provides concrete implementations for fetching market data
@@ -30,19 +30,25 @@ import java.util.HashMap;
  * - Ticker Data:  GET https://api.kraken.com/0/public/Ticker?pair={symbol}
  * - Order Book:   GET https://api.kraken.com/0/public/Depth?pair={symbol}&count=10
  * - WebSocket:    wss://ws.kraken.com
+ *
+ * Important log messages are now accumulated in a log which can be retrieved
+ * via the getLogMessages() method.
  */
 public class KrakenExchangeService extends ExchangeService {
 
     private static final String BASE_URL = "https://api.kraken.com/0/public";
     private static final String WS_BASE_URL = "wss://ws.kraken.com";
-    
+
     // Map to translate between Kraken's format and standard format
     private Map<String, String> krakenSymbolMap = new HashMap<>();
-    
+
     // WebSocket client and connection
     private HttpClient wsClient;
     private WebSocket webSocket;
     private KrakenWebSocketListener webSocketListener;
+
+    // Accumulates important log messages.
+    private StringBuilder logBuilder = new StringBuilder();
 
     /**
      * Constructs a KrakenExchangeService instance.
@@ -53,6 +59,15 @@ public class KrakenExchangeService extends ExchangeService {
         super("Kraken", fees);
         this.wsClient = HttpClient.newHttpClient();
         this.webSocketListener = new KrakenWebSocketListener();
+    }
+
+    /**
+     * Returns the accumulated log messages as a String.
+     *
+     * @return A String containing log messages.
+     */
+    public String getLogMessages() {
+        return logBuilder.toString();
     }
 
     /**
@@ -81,7 +96,8 @@ public class KrakenExchangeService extends ExchangeService {
 
             JSONObject json = new JSONObject(responseStr.toString());
             if (json.has("error") && json.getJSONArray("error").length() > 0) {
-                System.err.println("Error fetching Kraken trading pairs: " + json.getJSONArray("error").toString());
+                logBuilder.append("Error fetching Kraken trading pairs: ")
+                        .append(json.getJSONArray("error").toString()).append("\n");
                 return tradingPairs;
             }
 
@@ -89,18 +105,18 @@ public class KrakenExchangeService extends ExchangeService {
             for (String key : result.keySet()) {
                 JSONObject pairData = result.getJSONObject(key);
                 String symbol = key;
-                
-                // Some exchanges use standardized symbols (like BTCUSD),
-                // but Kraken uses XBT for Bitcoin, so we might need to track both forms
+
+                // Kraken may use different naming; track both forms.
                 krakenSymbolMap.put(symbol, symbol);
-                
+
                 TradingPair pair = new TradingPair(symbol);
                 tradingPairs.add(pair);
             }
-            
+
             setTradingPairs(tradingPairs);
-            
+
         } catch (Exception e) {
+            logBuilder.append("Exception in fetchTradingPairs: ").append(e.getMessage()).append("\n");
             e.printStackTrace();
         }
         return tradingPairs;
@@ -118,10 +134,10 @@ public class KrakenExchangeService extends ExchangeService {
     @Override
     protected Ticker fetchTickerDataREST(String symbol) {
         Ticker ticker = null;
-        
+
         // Convert to Kraken format if needed
         String krakenSymbol = krakenSymbolMap.getOrDefault(symbol, symbol);
-        
+
         try {
             String urlStr = BASE_URL + "/Ticker?pair=" + krakenSymbol;
             URL url = new URL(urlStr);
@@ -138,29 +154,31 @@ public class KrakenExchangeService extends ExchangeService {
 
             JSONObject json = new JSONObject(responseStr.toString());
             if (json.has("error") && json.getJSONArray("error").length() > 0) {
-                System.err.println("Error fetching Kraken ticker: " + json.getJSONArray("error").toString());
-            return null;
-        }
+                logBuilder.append("Error fetching Kraken ticker: ")
+                        .append(json.getJSONArray("error").toString()).append("\n");
+                return null;
+            }
 
             JSONObject result = json.getJSONObject("result");
             JSONObject tickerData = result.getJSONObject(krakenSymbol);
-            
-            // Parse Kraken ticker data format
+
             JSONArray bidData = tickerData.getJSONArray("b");
             double bidPrice = bidData.getDouble(0);
-            
+
             JSONArray askData = tickerData.getJSONArray("a");
             double askPrice = askData.getDouble(0);
-            
+
             JSONArray lastData = tickerData.getJSONArray("c");
             double lastPrice = lastData.getDouble(0);
-            
+
             JSONArray volumeData = tickerData.getJSONArray("v");
             double volume = volumeData.getDouble(1); // Using the 24h volume
-            
+
             ticker = new Ticker(bidPrice, askPrice, lastPrice, volume, new Date());
-            
+
         } catch (Exception e) {
+            logBuilder.append("Exception in fetchTickerDataREST for symbol ").append(symbol)
+                    .append(": ").append(e.getMessage()).append("\n");
             e.printStackTrace();
         }
         return ticker;
@@ -178,10 +196,10 @@ public class KrakenExchangeService extends ExchangeService {
     @Override
     protected OrderBook fetchOrderBookREST(String symbol) {
         OrderBook orderBook = null;
-        
+
         // Convert to Kraken format if needed
         String krakenSymbol = krakenSymbolMap.getOrDefault(symbol, symbol);
-        
+
         try {
             String urlStr = BASE_URL + "/Depth?pair=" + krakenSymbol + "&count=10";
             URL url = new URL(urlStr);
@@ -198,13 +216,14 @@ public class KrakenExchangeService extends ExchangeService {
 
             JSONObject json = new JSONObject(responseStr.toString());
             if (json.has("error") && json.getJSONArray("error").length() > 0) {
-                System.err.println("Error fetching Kraken order book: " + json.getJSONArray("error").toString());
+                logBuilder.append("Error fetching Kraken order book: ")
+                        .append(json.getJSONArray("error").toString()).append("\n");
                 return null;
             }
 
             JSONObject result = json.getJSONObject("result");
             JSONObject bookData = result.getJSONObject(krakenSymbol);
-            
+
             JSONArray bidsArray = bookData.getJSONArray("bids");
             JSONArray asksArray = bookData.getJSONArray("asks");
 
@@ -225,91 +244,92 @@ public class KrakenExchangeService extends ExchangeService {
             }
 
             orderBook = new OrderBook(symbol, bids, asks, new Date());
-            
+
         } catch (Exception e) {
+            logBuilder.append("Exception in fetchOrderBookREST for symbol ").append(symbol)
+                    .append(": ").append(e.getMessage()).append("\n");
             e.printStackTrace();
         }
         return orderBook;
     }
-    
+
     /**
-     * Initializes WebSocket connections for market data streaming from Kraken
+     * Initializes WebSocket connections for market data streaming from Kraken.
      *
-     * @param symbols List of symbols to subscribe to
-     * @return true if successfully connected, false otherwise
+     * @param symbols List of symbols to subscribe to.
+     * @return true if successfully connected, false otherwise.
      */
     @Override
     public boolean initializeWebSocket(List<String> symbols) {
         try {
-            // Close existing connection if any
+            // Close existing connection if any.
             if (webSocket != null) {
                 closeWebSocket();
             }
-            
-            // Connect to Kraken WebSocket stream
+
             webSocket = wsClient.newWebSocketBuilder()
                     .buildAsync(URI.create(WS_BASE_URL), webSocketListener)
                     .join();
-            
-            // Subscribe to ticker and book channels for each symbol
+
+            // Subscribe to ticker and book channels for each symbol.
             JSONObject subscribeMsg = new JSONObject();
             subscribeMsg.put("name", "subscribe");
-            
+
             JSONArray pairs = new JSONArray();
             for (String symbol : symbols) {
-                // Convert to Kraken format if needed
+                // Convert to Kraken format if needed.
                 String krakenSymbol = krakenSymbolMap.getOrDefault(symbol, symbol);
                 pairs.put(krakenSymbol);
             }
-            
+            subscribeMsg.put("pair", pairs);
+
+            // Subscribe to ticker channel.
             JSONObject subscription = new JSONObject();
-            
-            // Subscribe to ticker channel
             subscription.put("name", "ticker");
             subscribeMsg.put("subscription", subscription);
-            subscribeMsg.put("pair", pairs);
             webSocket.sendText(subscribeMsg.toString(), true);
-            
-            // Subscribe to book channel
+
+            // Subscribe to book channel.
             subscription.put("name", "book");
-            subscription.put("depth", 10); // Depth of 10 entries
+            subscription.put("depth", 10); // Depth of 10 entries.
             subscribeMsg.put("subscription", subscription);
             webSocket.sendText(subscribeMsg.toString(), true);
-            
+
             websocketConnected = true;
-            System.out.println("Kraken WebSocket connected for symbols: " + symbols);
+            logBuilder.append("Kraken WebSocket connected for symbols: ").append(symbols).append("\n");
             return true;
         } catch (Exception e) {
+            logBuilder.append("Exception initializing Kraken WebSocket: ").append(e.getMessage()).append("\n");
             e.printStackTrace();
             websocketConnected = false;
             return false;
         }
     }
-    
+
     /**
-     * Closes the WebSocket connection
+     * Closes the WebSocket connection.
      */
     @Override
     public void closeWebSocket() {
         if (webSocket != null) {
             webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Closing connection");
             websocketConnected = false;
-            System.out.println("Kraken WebSocket connection closed");
+            logBuilder.append("Kraken WebSocket connection closed\n");
         }
     }
-    
+
     /**
-     * WebSocket listener for Kraken data
+     * WebSocket listener for Kraken data.
      */
     private class KrakenWebSocketListener implements WebSocket.Listener {
         private StringBuilder buffer = new StringBuilder();
-        
+
         @Override
         public void onOpen(WebSocket webSocket) {
-            System.out.println("Kraken WebSocket connection opened");
+            logBuilder.append("Kraken WebSocket connection opened\n");
             WebSocket.Listener.super.onOpen(webSocket);
         }
-        
+
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             buffer.append(data);
@@ -320,78 +340,76 @@ public class KrakenExchangeService extends ExchangeService {
             }
             return WebSocket.Listener.super.onText(webSocket, data, last);
         }
-        
+
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            System.out.println("Kraken WebSocket closed: " + statusCode + ", reason: " + reason);
+            logBuilder.append("Kraken WebSocket closed: ").append(statusCode)
+                    .append(", reason: ").append(reason).append("\n");
             websocketConnected = false;
             return WebSocket.Listener.super.onClose(webSocket, statusCode, reason);
         }
-        
+
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            System.err.println("Kraken WebSocket error: " + error.getMessage());
+            logBuilder.append("Kraken WebSocket error: ").append(error.getMessage()).append("\n");
             error.printStackTrace();
             websocketConnected = false;
             WebSocket.Listener.super.onError(webSocket, error);
         }
-        
+
         /**
-         * Process the WebSocket message and update the cache
+         * Processes the WebSocket message and updates the cache.
          */
         private void processMessage(String message) {
             try {
-                // Kraken's WebSocket messages can be arrays or objects
+                // Kraken's WebSocket messages can be arrays or objects.
                 if (message.startsWith("[")) {
                     JSONArray data = new JSONArray(message);
-                    
-                    // Check if this is a data message (data[1] is the channel name)
+
+                    // Check if this is a data message.
                     if (data.length() >= 3 && !data.isNull(1)) {
                         String channelName = data.optString(1);
-                        String pair = data.optString(3); // The pair name
-                        
+                        String pair = data.optString(3); // The pair name.
+
                         if ("ticker".equals(channelName)) {
-                            // Process ticker data
                             JSONObject tickerData = data.getJSONObject(1);
-                            
+
                             JSONArray bidData = tickerData.getJSONArray("b");
                             double bidPrice = bidData.getDouble(0);
-                            
+
                             JSONArray askData = tickerData.getJSONArray("a");
                             double askPrice = askData.getDouble(0);
-                            
+
                             JSONArray lastData = tickerData.getJSONArray("c");
                             double lastPrice = lastData.getDouble(0);
-                            
+
                             JSONArray volumeData = tickerData.getJSONArray("v");
-                            double volume = volumeData.getDouble(1); // Using the 24h volume
-                            
+                            double volume = volumeData.getDouble(1); // 24h volume.
+
                             Ticker ticker = new Ticker(bidPrice, askPrice, lastPrice, volume, new Date());
                             tickerCache.put(pair, ticker);
                         }
                         else if ("book".equals(channelName)) {
-                            // Process order book data
                             JSONObject bookData = data.getJSONObject(1);
-                            
-                            // Get current order book or create new one
+
+                            // Get current order book or create new one.
                             OrderBook currentBook = orderBookCache.get(pair);
                             List<OrderBookEntry> bids = new ArrayList<>();
                             List<OrderBookEntry> asks = new ArrayList<>();
-                            
+
                             if (currentBook != null) {
                                 bids = new ArrayList<>(currentBook.getBids());
                                 asks = new ArrayList<>(currentBook.getAsks());
                             }
-                            
-                            // Process bids if present
+
+                            // Process bids if present.
                             if (bookData.has("bs")) {
                                 JSONArray newBids = bookData.getJSONArray("bs");
                                 for (int i = 0; i < newBids.length(); i++) {
                                     JSONArray entry = newBids.getJSONArray(i);
                                     double price = Double.parseDouble(entry.getString(0));
                                     double volume = Double.parseDouble(entry.getString(1));
-                                    
-                                    // Update or add the bid
+
                                     boolean found = false;
                                     for (int j = 0; j < bids.size(); j++) {
                                         if (bids.get(j).getPrice() == price) {
@@ -404,22 +422,20 @@ public class KrakenExchangeService extends ExchangeService {
                                             break;
                                         }
                                     }
-                                    
                                     if (!found && volume > 0) {
                                         bids.add(new OrderBookEntry(price, volume));
                                     }
                                 }
                             }
-                            
-                            // Process asks if present
+
+                            // Process asks if present.
                             if (bookData.has("as")) {
                                 JSONArray newAsks = bookData.getJSONArray("as");
                                 for (int i = 0; i < newAsks.length(); i++) {
                                     JSONArray entry = newAsks.getJSONArray(i);
                                     double price = Double.parseDouble(entry.getString(0));
                                     double volume = Double.parseDouble(entry.getString(1));
-                                    
-                                    // Update or add the ask
+
                                     boolean found = false;
                                     for (int j = 0; j < asks.size(); j++) {
                                         if (asks.get(j).getPrice() == price) {
@@ -432,36 +448,35 @@ public class KrakenExchangeService extends ExchangeService {
                                             break;
                                         }
                                     }
-                                    
                                     if (!found && volume > 0) {
                                         asks.add(new OrderBookEntry(price, volume));
                                     }
                                 }
                             }
-                            
-                            // Sort the book entries
-                            bids.sort((e1, e2) -> Double.compare(e2.getPrice(), e1.getPrice())); // Descending
-                            asks.sort((e1, e2) -> Double.compare(e1.getPrice(), e2.getPrice())); // Ascending
-                            
-                            // Create or update the order book
+
+                            // Sort bids descending and asks ascending.
+                            bids.sort((e1, e2) -> Double.compare(e2.getPrice(), e1.getPrice()));
+                            asks.sort((e1, e2) -> Double.compare(e1.getPrice(), e2.getPrice()));
+
                             OrderBook newBook = new OrderBook(pair, bids, asks, new Date());
                             orderBookCache.put(pair, newBook);
                         }
                     }
                 }
                 else if (message.startsWith("{")) {
-                    // Handle subscription status messages
                     JSONObject json = new JSONObject(message);
                     if (json.has("status")) {
                         String status = json.getString("status");
                         if ("subscribed".equals(status)) {
-                            System.out.println("Kraken subscription confirmed: " + json.toString());
+                            logBuilder.append("Kraken subscription confirmed: ").append(json.toString()).append("\n");
                         } else if ("error".equals(status)) {
-                            System.err.println("Kraken subscription error: " + json.toString());
+                            logBuilder.append("Kraken subscription error: ").append(json.toString()).append("\n");
                         }
                     }
                 }
             } catch (Exception e) {
+                logBuilder.append("Exception in processing Kraken WebSocket message: ")
+                        .append(e.getMessage()).append("\n");
                 e.printStackTrace();
             }
         }

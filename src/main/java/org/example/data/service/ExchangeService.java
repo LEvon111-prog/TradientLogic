@@ -20,10 +20,10 @@ public abstract class ExchangeService {
 
     // Cache for real-time ticker data
     protected ConcurrentHashMap<String, Ticker> tickerCache;
-    
+
     // Cache for real-time order book data
     protected ConcurrentHashMap<String, OrderBook> orderBookCache;
-    
+
     // Flag to track if WebSocket connection is active
     protected volatile boolean websocketConnected = false;
 
@@ -68,7 +68,7 @@ public abstract class ExchangeService {
         if (cachedTicker != null) {
             return cachedTicker;
         }
-        
+
         // Fall back to REST API if WebSocket data is not available
         return fetchTickerDataREST(symbol);
     }
@@ -88,7 +88,7 @@ public abstract class ExchangeService {
         if (cachedOrderBook != null) {
             return cachedOrderBook;
         }
-        
+
         // Fall back to REST API if WebSocket data is not available
         return fetchOrderBookREST(symbol);
     }
@@ -100,7 +100,7 @@ public abstract class ExchangeService {
 
     /**
      * Initializes WebSocket connections for market data streaming
-     * 
+     *
      * @param symbols List of symbols to subscribe to
      * @return true if successfully connected, false otherwise
      */
@@ -121,7 +121,7 @@ public abstract class ExchangeService {
     public double getFees() {
         return fees;
     }
-    
+
     /**
      * Checks if the WebSocket connection is active
      */
@@ -131,7 +131,7 @@ public abstract class ExchangeService {
 
     /**
      * Gets the trading fee for this exchange.
-     * 
+     *
      * @return The trading fee as a decimal (e.g., 0.001 for 0.1%)
      */
     public double getTradingFees() {

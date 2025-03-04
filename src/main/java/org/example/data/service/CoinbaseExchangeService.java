@@ -23,23 +23,27 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * CoinbaseExchangeService provides implementations for fetching data from Coinbase's API.
- * <p>
+ *
  * Endpoints used:
  * - Trading Pairs: GET https://api.exchange.coinbase.com/products
  * - Ticker Data:  GET https://api.exchange.coinbase.com/products/{symbol}/ticker
  * - Order Book:   GET https://api.exchange.coinbase.com/products/{symbol}/book?level=2
  * - WebSocket:    wss://ws-feed.exchange.coinbase.com
+ *
+ * Important log messages are now accumulated internally and can be retrieved using getLogMessages().
  */
 public class CoinbaseExchangeService extends ExchangeService {
 
-    // Base URL for Coinbase endpoints
     private static final String BASE_URL = "https://api.exchange.coinbase.com";
     private static final String WS_BASE_URL = "wss://ws-feed.exchange.coinbase.com";
-    
+
     // WebSocket client and connection
     private HttpClient wsClient;
     private WebSocket webSocket;
     private CoinbaseWebSocketListener webSocketListener;
+
+    // Accumulates important log messages.
+    private StringBuilder logBuilder = new StringBuilder();
 
     /**
      * Constructs a CoinbaseExchangeService instance.
@@ -47,10 +51,18 @@ public class CoinbaseExchangeService extends ExchangeService {
      * @param fees The trading fee as a percentage (e.g., 0.001 for 0.1%).
      */
     public CoinbaseExchangeService(double fees) {
-        // "Coinbase" is the exchange name
         super("Coinbase", fees);
         this.wsClient = HttpClient.newHttpClient();
         this.webSocketListener = new CoinbaseWebSocketListener();
+    }
+
+    /**
+     * Returns the accumulated log messages as a String.
+     *
+     * @return A String containing log messages.
+     */
+    public String getLogMessages() {
+        return logBuilder.toString();
     }
 
     /**
@@ -81,10 +93,8 @@ public class CoinbaseExchangeService extends ExchangeService {
             JSONArray products = new JSONArray(responseStr.toString());
             for (int i = 0; i < products.length(); i++) {
                 JSONObject productObj = products.getJSONObject(i);
-                // Optionally, filter by status if desired (e.g., "online")
                 String status = productObj.optString("status", "online");
                 if ("online".equalsIgnoreCase(status)) {
-                    // Use the product "id" as the trading pair symbol (e.g., "ARB-USD")
                     String symbol = productObj.getString("id");
                     TradingPair pair = new TradingPair(symbol);
                     tradingPairs.add(pair);
@@ -93,7 +103,8 @@ public class CoinbaseExchangeService extends ExchangeService {
             // Update the internal cache in ExchangeService
             setTradingPairs(tradingPairs);
         } catch (Exception e) {
-            System.err.println("Error fetching trading pairs from Coinbase: " + e.getMessage());
+            logBuilder.append("Error fetching trading pairs from Coinbase: ")
+                    .append(e.getMessage()).append("\n");
             e.printStackTrace();
         }
         return tradingPairs;
@@ -102,7 +113,7 @@ public class CoinbaseExchangeService extends ExchangeService {
     /**
      * Retrieves the latest ticker data for the specified symbol using REST API.
      * This is used as a fallback when WebSocket data is not available.
-     * 
+     *
      * Endpoint: GET https://api.exchange.coinbase.com/products/{symbol}/ticker
      *
      * @param symbol The trading pair symbol (e.g., "ARB-USD").
@@ -130,12 +141,12 @@ public class CoinbaseExchangeService extends ExchangeService {
             double ask = json.getDouble("ask");
             double price = json.getDouble("price");
             double volume = json.getDouble("volume");
-            // Parse the "time" field if needed; here we use the current time as a placeholder.
             Date timestamp = new Date();
 
             ticker = new Ticker(bid, ask, price, volume, timestamp);
         } catch (Exception e) {
-            System.err.println("Error fetching ticker data from Coinbase for " + symbol + ": " + e.getMessage());
+            logBuilder.append("Error fetching ticker data from Coinbase for ")
+                    .append(symbol).append(": ").append(e.getMessage()).append("\n");
         }
         return ticker;
     }
@@ -143,7 +154,7 @@ public class CoinbaseExchangeService extends ExchangeService {
     /**
      * Retrieves the current order book for the specified trading pair using REST API.
      * This is used as a fallback when WebSocket data is not available.
-     * 
+     *
      * Endpoint: GET https://api.exchange.coinbase.com/products/{symbol}/book?level=2
      *
      * @param symbol The trading pair symbol (e.g., "ARB-USD").
@@ -175,7 +186,6 @@ public class CoinbaseExchangeService extends ExchangeService {
                 JSONArray entry = bidsArray.getJSONArray(i);
                 double price = Double.parseDouble(entry.getString(0));
                 double volume = Double.parseDouble(entry.getString(1));
-                // The third element (number of orders) can be ignored if not needed.
                 bids.add(new OrderBookEntry(price, volume));
             }
 
@@ -190,76 +200,72 @@ public class CoinbaseExchangeService extends ExchangeService {
             Date timestamp = new Date();
             orderBook = new OrderBook(symbol, bids, asks, timestamp);
         } catch (Exception e) {
-            System.err.println("Error fetching order book from Coinbase for " + symbol + ": " + e.getMessage());
+            logBuilder.append("Error fetching order book from Coinbase for ")
+                    .append(symbol).append(": ").append(e.getMessage()).append("\n");
         }
         return orderBook;
     }
-    
+
     /**
-     * Initializes WebSocket connections for market data streaming from Coinbase
+     * Initializes WebSocket connections for market data streaming from Coinbase.
      *
-     * @param symbols List of symbols to subscribe to
-     * @return true if successfully connected, false otherwise
+     * @param symbols List of symbols to subscribe to.
+     * @return true if successfully connected, false otherwise.
      */
     @Override
     public boolean initializeWebSocket(List<String> symbols) {
         if (symbols == null || symbols.isEmpty()) {
-            System.err.println("No symbols provided for Coinbase WebSocket initialization");
+            logBuilder.append("No symbols provided for Coinbase WebSocket initialization\n");
             return false;
         }
-        
+
         try {
             // Close existing connection if any
             if (webSocket != null) {
                 closeWebSocket();
             }
-            
-            System.out.println("Connecting to Coinbase WebSocket...");
-            
+
+            logBuilder.append("Connecting to Coinbase WebSocket...\n");
+
             // Connect to Coinbase WebSocket stream with timeout
             CompletableFuture<WebSocket> futureWs = wsClient.newWebSocketBuilder()
                     .buildAsync(URI.create(WS_BASE_URL), webSocketListener);
-            
             webSocket = futureWs.get(10, TimeUnit.SECONDS);
-            
+
             // Create subscription message for ticker and level2 (order book) channels
             JSONObject subscribeMsg = new JSONObject();
             subscribeMsg.put("type", "subscribe");
-            
-            // Print the symbols we're subscribing to
-            System.out.println("Subscribing to Coinbase products: " + symbols);
-            
-            // Add product_ids (symbols)
+
+            logBuilder.append("Subscribing to Coinbase products: ").append(symbols).append("\n");
+
             JSONArray productIds = new JSONArray();
             for (String symbol : symbols) {
                 productIds.put(symbol);
             }
             subscribeMsg.put("product_ids", productIds);
-            
-            // Add channels
+
             JSONArray channels = new JSONArray();
             channels.put("ticker");
             channels.put("level2");
             subscribeMsg.put("channels", channels);
-            
-            // Send subscription message
+
             String subMessage = subscribeMsg.toString();
-            System.out.println("Sending Coinbase subscription message: " + subMessage);
+            logBuilder.append("Sending Coinbase subscription message: ").append(subMessage).append("\n");
             webSocket.sendText(subMessage, true);
-            
+
             websocketConnected = true;
-            System.out.println("Coinbase WebSocket connected for symbols: " + symbols);
+            logBuilder.append("Coinbase WebSocket connected for symbols: ").append(symbols).append("\n");
             return true;
         } catch (Exception e) {
-            System.err.println("Failed to connect to Coinbase WebSocket: " + e.getMessage());
+            logBuilder.append("Failed to connect to Coinbase WebSocket: ").append(e.getMessage()).append("\n");
             e.printStackTrace();
             websocketConnected = false;
             return false;
         }
     }
-    
+
     /**
-     * Closes the WebSocket connection
+     * Closes the WebSocket connection.
      */
     @Override
     public void closeWebSocket() {
@@ -267,25 +273,25 @@ public class CoinbaseExchangeService extends ExchangeService {
             try {
                 webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Closing connection");
                 websocketConnected = false;
-                System.out.println("Coinbase WebSocket connection closed");
+                logBuilder.append("Coinbase WebSocket connection closed\n");
             } catch (Exception e) {
-                System.err.println("Error closing Coinbase WebSocket: " + e.getMessage());
+                logBuilder.append("Error closing Coinbase WebSocket: ").append(e.getMessage()).append("\n");
             }
         }
     }
-    
+
     /**
-     * WebSocket listener for Coinbase data
+     * WebSocket listener for Coinbase data.
      */
     private class CoinbaseWebSocketListener implements WebSocket.Listener {
         private StringBuilder buffer = new StringBuilder();
-        
+
         @Override
         public void onOpen(WebSocket webSocket) {
-            System.out.println("Coinbase WebSocket connection opened");
+            logBuilder.append("Coinbase WebSocket connection opened\n");
             WebSocket.Listener.super.onOpen(webSocket);
         }
-        
+
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             buffer.append(data);
@@ -295,60 +301,58 @@ public class CoinbaseExchangeService extends ExchangeService {
                 try {
                     processMessage(message);
                 } catch (Exception e) {
-                    System.err.println("Error processing Coinbase WebSocket message: " + e.getMessage());
+                    logBuilder.append("Error processing Coinbase WebSocket message: ")
+                            .append(e.getMessage()).append("\n");
                 }
             }
             return WebSocket.Listener.super.onText(webSocket, data, last);
         }
-        
+
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            System.out.println("Coinbase WebSocket closed: " + statusCode + ", reason: " + reason);
+            logBuilder.append("Coinbase WebSocket closed: ")
+                    .append(statusCode).append(", reason: ").append(reason).append("\n");
             websocketConnected = false;
             return WebSocket.Listener.super.onClose(webSocket, statusCode, reason);
         }
-        
+
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            System.err.println("Coinbase WebSocket error: " + error.getMessage());
+            logBuilder.append("Coinbase WebSocket error: ").append(error.getMessage()).append("\n");
             error.printStackTrace();
             websocketConnected = false;
             WebSocket.Listener.super.onError(webSocket, error);
         }
-        
+
         /**
-         * Process the WebSocket message and update the cache
+         * Process the WebSocket message and update the cache.
          */
         private void processMessage(String message) {
             try {
                 if (message.contains("error")) {
-                    System.err.println("Coinbase WebSocket error message: " + message);
+                    logBuilder.append("Coinbase WebSocket error message: ").append(message).append("\n");
                     return;
                 }
-                
+
                 JSONObject json = new JSONObject(message);
                 String type = json.optString("type", "");
-                
-                if (type.equals("subscriptions")) {
-                    System.out.println("Coinbase subscription confirmed: " + json.toString());
-                }
-                else if (type.equals("ticker")) {
-                    // Process ticker update
+
+                if ("subscriptions".equals(type)) {
+                    logBuilder.append("Coinbase subscription confirmed: ").append(json.toString()).append("\n");
+                } else if ("ticker".equals(type)) {
                     String symbol = json.getString("product_id");
                     double price = json.getDouble("price");
                     double bid = json.getDouble("best_bid");
                     double ask = json.getDouble("best_ask");
                     double volume = json.getDouble("volume_24h");
-                    
+
                     Ticker ticker = new Ticker(bid, ask, price, volume, new Date());
                     tickerCache.put(symbol, ticker);
-                }
-                else if (type.equals("snapshot")) {
-                    // Initial order book snapshot
+                } else if ("snapshot".equals(type)) {
                     String symbol = json.getString("product_id");
                     JSONArray bidsArray = json.getJSONArray("bids");
                     JSONArray asksArray = json.getJSONArray("asks");
-                    
+
                     List<OrderBookEntry> bids = new ArrayList<>();
                     for (int i = 0; i < bidsArray.length(); i++) {
                         JSONArray entry = bidsArray.getJSONArray(i);
@@ -356,7 +360,7 @@ public class CoinbaseExchangeService extends ExchangeService {
                         double volume = Double.parseDouble(entry.getString(1));
                         bids.add(new OrderBookEntry(price, volume));
                     }
-                    
+
                     List<OrderBookEntry> asks = new ArrayList<>();
                     for (int i = 0; i < asksArray.length(); i++) {
                         JSONArray entry = asksArray.getJSONArray(i);
@@ -364,83 +368,68 @@ public class CoinbaseExchangeService extends ExchangeService {
                         double volume = Double.parseDouble(entry.getString(1));
                         asks.add(new OrderBookEntry(price, volume));
                     }
-                    
+
                     OrderBook orderBook = new OrderBook(symbol, bids, asks, new Date());
                     orderBookCache.put(symbol, orderBook);
-                }
-                else if (type.equals("l2update")) {
-                    // Order book update - we need to update existing order book
+                } else if ("l2update".equals(type)) {
                     String symbol = json.getString("product_id");
                     JSONArray changes = json.getJSONArray("changes");
-                    
-                    // Get current order book from cache or create a new one
                     OrderBook currentBook = orderBookCache.get(symbol);
                     if (currentBook == null) {
-                        // If there's no existing order book, we need to fetch it first
                         currentBook = fetchOrderBookREST(symbol);
                         if (currentBook == null) {
-                            return; // Can't process update without a base order book
+                            return;
                         }
                     }
-                    
+
                     List<OrderBookEntry> bids = new ArrayList<>(currentBook.getBids());
                     List<OrderBookEntry> asks = new ArrayList<>(currentBook.getAsks());
-                    
-                    // Process each change
+
                     for (int i = 0; i < changes.length(); i++) {
                         JSONArray change = changes.getJSONArray(i);
                         String side = change.getString(0);
                         double price = Double.parseDouble(change.getString(1));
                         double size = Double.parseDouble(change.getString(2));
-                        
-                        if (side.equals("buy")) {
+
+                        if ("buy".equals(side)) {
                             updateOrderBookSide(bids, price, size);
-                        } else if (side.equals("sell")) {
+                        } else if ("sell".equals(side)) {
                             updateOrderBookSide(asks, price, size);
                         }
                     }
-                    
-                    // Create updated order book and put in cache
+
                     OrderBook updatedBook = new OrderBook(symbol, bids, asks, new Date());
                     orderBookCache.put(symbol, updatedBook);
-                }
-                else {
-                    // For debugging unexpected message types
-                    System.out.println("Received unexpected Coinbase message type: " + type);
+                } else {
+                    logBuilder.append("Received unexpected Coinbase message type: ").append(type).append("\n");
                 }
             } catch (Exception e) {
-                System.err.println("Error parsing Coinbase WebSocket message: " + message);
+                logBuilder.append("Error parsing Coinbase WebSocket message: ")
+                        .append(message).append(" | Exception: ").append(e.getMessage()).append("\n");
                 e.printStackTrace();
             }
         }
-        
+
         /**
-         * Helper method to update a side (bids or asks) of an order book
+         * Helper method to update a side (bids or asks) of an order book.
          */
         private void updateOrderBookSide(List<OrderBookEntry> entries, double price, double size) {
-            // Find if there's an existing entry with this price
             boolean found = false;
             for (int i = 0; i < entries.size(); i++) {
                 OrderBookEntry entry = entries.get(i);
                 if (entry.getPrice() == price) {
                     if (size > 0) {
-                        // Update the size
                         entries.set(i, new OrderBookEntry(price, size));
                     } else {
-                        // Remove the entry if size is 0
                         entries.remove(i);
                     }
                     found = true;
                     break;
                 }
             }
-            
-            // If not found and size > 0, add new entry
             if (!found && size > 0) {
                 entries.add(new OrderBookEntry(price, size));
             }
-            
-            // Sort bids in descending order by price
             entries.sort((e1, e2) -> Double.compare(e2.getPrice(), e1.getPrice()));
         }
     }
